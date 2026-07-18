@@ -385,12 +385,19 @@ document.querySelectorAll('[data-back]').forEach(btn => {
 
 // ---------------- Nickname ----------------
 const BAD_WORDS = [
+  // латиница-транслит (на случай ника латиницей)
   "hui","huy","pizd","ebal","eban","suk","blya","blyad","gandon","muda","pidor","pidr",
-  "fuck","shit","bitch","asshole","cunt","dick","whore","nigger","retard"
+  "fuck","shit","bitch","asshole","cunt","dick","whore","nigger","retard",
+  // кириллица — реальные корни, как их обычно пишут в нике
+  "хуй","хуе","хуё","пизд","ебал","ебан","ёбан","еба","сук","сучк","бля","гандон",
+  "муда","мудак","пидор","пидр","залуп","долбоеб","долбоёб","гондон","хер","мраз",
+  "шлюх","шалав","ниггер","негр","чурк","хохол","жид"
 ];
 function containsProfanity(text){
-  const norm = text.toLowerCase().replace(/[^a-zа-я0-9]/gi, "");
-  return BAD_WORDS.some(w => norm.includes(w));
+  const norm = text.toLowerCase()
+    .replace(/ё/g, "е")
+    .replace(/[^a-zа-я0-9]/gi, "");
+  return BAD_WORDS.some(w => norm.includes(w.replace(/ё/g,"е")));
 }
 function validateNickname(name){
   const trimmed = name.trim();
