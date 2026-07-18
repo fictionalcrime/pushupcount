@@ -417,7 +417,7 @@ class RepEngine{
   _resetCounting(){
     this.isDown = false;
     this.lastRepTimeMs = 0;
-    this.noseYWindow = [];
+    this.referenceY = null;
     this.downFrameCount = 0;
     this.upFrameCount = 0;
   }
@@ -428,7 +428,7 @@ class RepEngine{
     );
     this.poseLandmarker = await PoseLandmarker.createFromOptions(filesetResolver, {
       baseOptions: {
-        modelAssetPath: "https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_full/float16/1/pose_landmarker_full.task",
+        modelAssetPath: "https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_lite/float16/1/pose_landmarker_lite.task",
         delegate: "GPU"
       },
       runningMode: "VIDEO",
@@ -492,39 +492,49 @@ class RepEngine{
 
   _process(landmarks){
     if (!this.active){ this._debug(null, null, this.isDown, false); return; }
-    const nose = landmarks?.[NOSE];
-    const minVisibility = 0.5, minRepIntervalMs = 700, windowSize = 90;
-    const downFraction = 0.7, upFraction = 0.3, minRangeToCount = 0.05, requiredFrames = 6;
+    const minVisibility = 0.5, minRepIntervalMs = 600, requiredFrames = 3;
+    const downRatio = 0.55, upRatio = 0.25;
 
-    if (!nose || (nose.visibility ?? 1) < minVisibility){
+    const nose = landmarks?.[NOSE];
+    const ls = landmarks?.[11], rs = landmarks?.[12]; // плечи
+
+    if (!nose || !ls || !rs ||
+        (nose.visibility ?? 1) < minVisibility ||
+        (ls.visibility ?? 1) < minVisibility ||
+        (rs.visibility ?? 1) < minVisibility){
       this.downFrameCount = 0; this.upFrameCount = 0;
       this._debug(null, null, this.isDown, true); return;
     }
-    const noseY = nose.y;
-    this.noseYWindow.push(noseY);
-    if (this.noseYWindow.length > windowSize) this.noseYWindow.shift();
-    const minY = Math.min(...this.noseYWindow), maxY = Math.max(...this.noseYWindow);
-    const range = maxY - minY;
-    if (range < minRangeToCount){
-      this.downFrameCount = 0; this.upFrameCount = 0;
-      this._debug(noseY, null, this.isDown, true); return;
+
+    const shoulderWidth = Math.hypot(ls.x - rs.x, ls.y - rs.y);
+    if (shoulderWidth < 0.01){
+      this._debug(null, null, this.isDown, true); return;
     }
-    const fraction = (noseY - minY) / range;
-    this._debug(noseY, fraction, this.isDown, true);
+
+    if (this.referenceY == null){ this.referenceY = nose.y; }
+
+    // насколько нос опустился ниже "верхней" точки, в долях ширины плеч
+    const ratio = (nose.y - this.referenceY) / shoulderWidth;
+    this._debug(nose.y, ratio, this.isDown, true);
 
     const now = Date.now();
-    if (fraction > downFraction){ this.downFrameCount++; this.upFrameCount = 0; }
-    else if (fraction < upFraction){ this.upFrameCount++; this.downFrameCount = 0; }
+    if (ratio > downRatio){ this.downFrameCount++; this.upFrameCount = 0; }
+    else if (ratio < upRatio){ this.upFrameCount++; this.downFrameCount = 0; }
     else { this.downFrameCount = 0; this.upFrameCount = 0; }
 
     if (!this.isDown && this.downFrameCount >= requiredFrames){
       this.isDown = true; this.downFrameCount = 0;
     } else if (this.isDown && this.upFrameCount >= requiredFrames){
       this.isDown = false; this.upFrameCount = 0;
+      this.referenceY = nose.y; // перекалибровка "верхней" точки на месте
       if (now - this.lastRepTimeMs > minRepIntervalMs){
         this.lastRepTimeMs = now;
         this.onRep();
       }
+    } else if (!this.isDown && this.upFrameCount >= requiredFrames){
+      // человек подтверждённо наверху — плавно подстраиваем базовую линию
+      // (компенсирует смещение камеры/позы, не даёт "уехать" калибровке)
+      this.referenceY = nose.y;
     }
   }
 
