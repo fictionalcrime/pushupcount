@@ -471,7 +471,7 @@ class RepEngine{
   _resetCounting(){
     this.isDown = false;
     this.lastRepTimeMs = 0;
-    this.referenceY = null;
+    this.noseYWindow = [];
     this.downFrameCount = 0;
     this.upFrameCount = 0;
   }
@@ -546,11 +546,11 @@ class RepEngine{
 
   _process(landmarks){
     if (!this.active){ this._debug(null, null, this.isDown, false); return; }
-    const minVisibility = 0.5, minRepIntervalMs = 600, requiredFrames = 3;
-    const downRatio = 0.55, upRatio = 0.25;
-
     const nose = landmarks?.[NOSE];
-    const ls = landmarks?.[11], rs = landmarks?.[12]; // плечи
+    const ls = landmarks?.[11], rs = landmarks?.[12]; // плечи — только для масштаба
+    const minVisibility = 0.5, minRepIntervalMs = 650, windowSize = 90;
+    const downFraction = 0.7, upFraction = 0.3, requiredFrames = 4;
+    const minRangeShoulderRatio = 0.35; // диапазон должен быть хотя бы 35% ширины плеч
 
     if (!nose || !ls || !rs ||
         (nose.visibility ?? 1) < minVisibility ||
@@ -565,30 +565,35 @@ class RepEngine{
       this._debug(null, null, this.isDown, true); return;
     }
 
-    if (this.referenceY == null){ this.referenceY = nose.y; }
+    const noseY = nose.y;
+    this.noseYWindow.push(noseY);
+    if (this.noseYWindow.length > windowSize) this.noseYWindow.shift();
+    const minY = Math.min(...this.noseYWindow), maxY = Math.max(...this.noseYWindow);
+    const range = maxY - minY;
 
-    // насколько нос опустился ниже "верхней" точки, в долях ширины плеч
-    const ratio = (nose.y - this.referenceY) / shoulderWidth;
-    this._debug(nose.y, ratio, this.isDown, true);
+    // диапазон движения должен быть заметным относительно тела — иначе это шум/кивок
+    const minRangeToCount = shoulderWidth * minRangeShoulderRatio;
+    if (range < minRangeToCount){
+      this.downFrameCount = 0; this.upFrameCount = 0;
+      this._debug(noseY, null, this.isDown, true); return;
+    }
+
+    const fraction = (noseY - minY) / range;
+    this._debug(noseY, fraction, this.isDown, true);
 
     const now = Date.now();
-    if (ratio > downRatio){ this.downFrameCount++; this.upFrameCount = 0; }
-    else if (ratio < upRatio){ this.upFrameCount++; this.downFrameCount = 0; }
+    if (fraction > downFraction){ this.downFrameCount++; this.upFrameCount = 0; }
+    else if (fraction < upFraction){ this.upFrameCount++; this.downFrameCount = 0; }
     else { this.downFrameCount = 0; this.upFrameCount = 0; }
 
     if (!this.isDown && this.downFrameCount >= requiredFrames){
       this.isDown = true; this.downFrameCount = 0;
     } else if (this.isDown && this.upFrameCount >= requiredFrames){
       this.isDown = false; this.upFrameCount = 0;
-      this.referenceY = nose.y; // перекалибровка "верхней" точки на месте
       if (now - this.lastRepTimeMs > minRepIntervalMs){
         this.lastRepTimeMs = now;
         this.onRep();
       }
-    } else if (!this.isDown && this.upFrameCount >= requiredFrames){
-      // человек подтверждённо наверху — плавно подстраиваем базовую линию
-      // (компенсирует смещение камеры/позы, не даёт "уехать" калибровке)
-      this.referenceY = nose.y;
     }
   }
 
